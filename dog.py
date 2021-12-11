@@ -7,7 +7,7 @@
 #Output
 #  Binary NIfTI image with 'z' prefix
 #Example Usage
-# python blur.py ./DWI.nii 4
+# python dog.py ./DWI.nii 4
 
 import nibabel as nib
 from scipy import ndimage
@@ -121,7 +121,7 @@ def _smooth_array(arr, affine, fwhm=None, ensure_finite=True, copy=True):
         # FWHM = sigma*sqrt(8*ln(2)) = sigma*2.3548.
         #convert fwhm to sd in voxels see https://github.com/0todd0000/spm1d
         fwhmvox = fwhm / vox_size
-        sd    = fwhmvox / math.sqrt(8 * math.log(2))
+        sd = fwhmvox / math.sqrt(8 * math.log(2))
         for n, s in enumerate(sd):
             if s > 0.0:
                 ndimage.gaussian_filter1d(arr, s, output=arr, axis=n)
@@ -129,7 +129,7 @@ def _smooth_array(arr, affine, fwhm=None, ensure_finite=True, copy=True):
 
 def binary_zero_crossing(img):
     #binarize: negative voxels are zero
-    edge = np.where(img >= 0.0, 1, 0)
+    edge = np.where(img > 0.0, 1, 0)
     edge = ndimage.distance_transform_edt(edge)
     edge[edge > 1] = 0
     edge[edge > 0] = 1
@@ -169,8 +169,8 @@ def process_nifti(fnm, fwhm):
     img = dehaze(img, 5)
     img = difference_of_gaussian(hdr, img, fwhm)
     nii = nib.Nifti1Image(img, hdr.affine, hdr.header)
-    print(nii.header)
-    #clear intent code
+    # print(nii.header)
+    #update header
     nii.header.set_data_dtype(np.uint8)  
     nii.header['intent_code'] = 0
     nii.header['scl_slope'] = 1.0

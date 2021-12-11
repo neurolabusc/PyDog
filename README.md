@@ -14,6 +14,14 @@ You provide two arguments: the name of the NIfTI image to process and the size o
 python dog.py ./DWI.nii.gz 4
 ```
 
+## Implementation and Dependencies
+
+ - [numpy](https://numpy.org) is used for numerics.
+ - scikit-image [Multi-Otsu Thresholding](https://scikit-image.org/docs/dev/auto_examples/segmentation/plot_multiotsu.html) is used to remove haze (zero uninteresting voxels).
+ - scipy [gaussian_filter1d](https://docs.scipy.org/doc/scipy/reference/generated/scipy.ndimage.gaussian_filter1d.html) is used for Gaussian blur.
+ - scipy [distance_transform_edt](https://docs.scipy.org/doc/scipy/reference/generated/scipy.ndimage.distance_transform_edt.html) is used to create an edge map of voxels that are at a [zero-crossing](https://homepages.inf.ed.ac.uk/rbf/HIPR2/zeros.htm).
+ - [nibabel](https://nipy.org/nibabel/) if used to read and write NIfTI images.
+
 ## Links
 
  - [Additional sample images](https://github.com/neurolabusc/DoG)
