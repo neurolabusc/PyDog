@@ -10,7 +10,10 @@
 # python dog.py ./DWI.nii 4
 
 import nibabel as nib
-from scipy import ndimage
+from scipy.ndimage import (
+    gaussian_filter1d,
+    distance_transform_edt
+)
 import numpy as np
 import scipy.stats as st
 import os
@@ -19,29 +22,55 @@ import math
 #skimage package is "scikit-image"
 import skimage
 
-def bound(lo, hi, val):
-    return max(lo, min(hi, val))
+def clamp(low, high, value):
+    """bound an integer to a range
 
-def dehaze(img, level):
+    Parameters
+    ----------
+    low : int
+    high : int
+    value : int
+
+    Returns
+    -------
+    result : int
+    """
+    return max(low, min(high, value))
+
+def dehaze(img, level, verbose=0):
     """use Otsu to threshold https://scikit-image.org/docs/stable/auto_examples/segmentation/plot_multiotsu.html
         n.b. threshold used to mask image: dark values are zeroed, but result is NOT binary
-        level: value 1..5 with larger values preserving more bright voxels
-        level: dark_classes/total_classes
+    Parameters
+    ----------
+    img : Niimg-like object
+        Image(s) to run DoG on (see :ref:`extracting_data`
+        for a detailed description of the valid input types).
+    level : int
+        value 1..5 with larger values preserving more bright voxels
+        dark_classes/total_classes
             1: 3/4
             2: 2/3
             3: 1/2
             4: 1/3
             5: 1/4
+    verbose : :obj:`int`, optional
+        Controls the amount of verbosity: higher numbers give more messages
+        (0 means no messages). Default=0.
+    Returns
+    -------
+    :class:`nibabel.nifti1.Nifti1Image`
     """
-    level = bound(1, 5, level)
+    fdata = img.get_fdata()
+    level = clamp(1, 5, level)
     n_classes = abs(3 - level) + 2
     dark_classes = 4 - level
-    dark_classes = bound(1, 3, dark_classes)
-    thresholds = skimage.filters.threshold_multiotsu(img, n_classes)
+    dark_classes = clamp(1, 3, dark_classes)
+    thresholds = skimage.filters.threshold_multiotsu(fdata, n_classes)
     thresh = thresholds[dark_classes - 1]
-    print("Zeroing voxels darker than ", thresh)
-    img[img < thresh] = 0
-    return img
+    if verbose > 0:
+        print("Zeroing voxels darker than {}".format(thresh), verbose=verbose)
+    fdata[fdata < thresh] = 0
+    return fdata
 
 # https://github.com/nilearn/nilearn/blob/1607b52458c28953a87bbe6f42448b7b4e30a72f/nilearn/image/image.py#L164
 def _smooth_array(arr, affine, fwhm=None, ensure_finite=True, copy=True):
@@ -124,64 +153,100 @@ def _smooth_array(arr, affine, fwhm=None, ensure_finite=True, copy=True):
         sd = fwhmvox / math.sqrt(8 * math.log(2))
         for n, s in enumerate(sd):
             if s > 0.0:
-                ndimage.gaussian_filter1d(arr, s, output=arr, axis=n)
+                gaussian_filter1d(arr, s, output=arr, axis=n)
     return arr
 
-def binary_zero_crossing(img):
-    #binarize: negative voxels are zero
-    edge = np.where(img > 0.0, 1, 0)
-    edge = ndimage.distance_transform_edt(edge)
+def binary_zero_crossing(fdata):
+    """binarize (negative voxels are zero)
+    Parameters
+    ----------
+    fdata : numpy.memmap from Niimg-like object
+    Returns
+    -------
+    :class:`nibabel.nifti1.Nifti1Image`
+    """
+    edge = np.where(fdata > 0.0, 1, 0)
+    edge = distance_transform_edt(edge)
     edge[edge > 1] = 0
     edge[edge > 0] = 1
     edge = edge.astype('uint8')
     return edge
 
-def difference_of_gaussian(nii, img, fwhmNarrow):
-    #apply Difference of Gaussian filter
-    # https://en.wikipedia.org/wiki/Difference_of_Gaussians
-    # https://en.wikipedia.org/wiki/Marr–Hildreth_algorithm
-    #D. Marr and E. C. Hildreth. Theory of edge detection. Proceedings of the Royal Society, London B, 207:187-217, 1980
-    #Choose the narrow kernel width
-    #  human cortex about 2.5mm thick
-    #arbitrary ratio of wide to narrow kernel
-    #  Marr and Hildreth (1980) suggest 1.6
-    #  Wilson and Giese (1977) suggest 1.5
-    #Large values yield smoother results
+def difference_of_gaussian(fdata, affine, fwhmNarrow, verbose=0):
+    """Apply Difference of Gaussian (DoG) filter.
+    https://en.wikipedia.org/wiki/Difference_of_Gaussians
+    https://en.wikipedia.org/wiki/Marr–Hildreth_algorithm
+    D. Marr and E. C. Hildreth. Theory of edge detection. Proceedings of the Royal Society, London B, 207:187-217, 1980
+    Parameters
+    ----------
+    fdata : numpy.memmap from Niimg-like object
+    affine : :class:`numpy.ndarray`
+        (4, 4) matrix, giving affine transformation for image. (3, 3) matrices
+        are also accepted (only these coefficients are used).
+    fwhmNarrow : int
+        Narrow kernel width, in millimeters. Is an arbitrary ratio of wide to narrow kernel.
+            human cortex about 2.5mm thick
+            Large values yield smoother results
+    verbose : :obj:`int`, optional
+        Controls the amount of verbosity: higher numbers give more messages
+        (0 means no messages). Default=0.
+    Returns
+    -------
+    :class:`nibabel.nifti1.Nifti1Image`
+    """
+
+    #Hardcode 1.6 as ratio of wide versus narrow FWHM
+    # Marr and Hildreth (1980) suggest narrow to wide ratio of 1.6
+    # Wilson and Giese (1977) suggest narrow to wide ratio of 1.5
     fwhmWide = fwhmNarrow * 1.6
     #optimization: we will use the narrow Gaussian as the input to the wide filter
-    fwhmWide = math.sqrt((fwhmWide*fwhmWide) - (fwhmNarrow*fwhmNarrow));
-    print('Narrow/Wide FWHM {} / {}'.format(fwhmNarrow, fwhmWide))
-    img25 = _smooth_array(img, nii.affine, fwhmNarrow)
-    img40 = _smooth_array(img25, nii.affine, fwhmWide)
-    img = img25 - img40
+    fwhmWide = math.sqrt((fwhmWide*fwhmWide) - (fwhmNarrow*fwhmNarrow))
+    if verbose > 0:
+        print('Narrow/Wide FWHM {} / {}'.format(fwhmNarrow, fwhmWide))
+    imgNarrow = _smooth_array(fdata, affine, fwhmNarrow)
+    imgWide = _smooth_array(imgNarrow, affine, fwhmWide)
+    img = imgNarrow - imgWide
     img = binary_zero_crossing(img)
-    return img
+    return img 
 
-def process_nifti(fnm, fwhm): 
-    hdr = nib.load(fnm)
-    img = hdr.get_fdata()
-    hdr.header.set_data_dtype(np.float32)
-    img = img.astype(np.float32)
-    str = f'Input intensity range {np.nanmin(img)}..{np.nanmax(img)}'
-    print(str)
-    str = f'Image shape {img.shape[0]}x{img.shape[1]}x{img.shape[2]}'
-    print(str)
-    img = dehaze(img, 5)
-    img = difference_of_gaussian(hdr, img, fwhm)
-    nii = nib.Nifti1Image(img, hdr.affine, hdr.header)
-    # print(nii.header)
+def dog_img(img, fwhm, verbose=0):
+    """Find edges of a NIfTI image using the Difference of Gaussian (DoG).
+    Parameters
+    ----------
+    img : Niimg-like object
+        Image(s) to run DoG on (see :ref:`extracting_data`
+        for a detailed description of the valid input types).
+    fwhm : int
+    	Edge detection strength, as a full-width at half maximum, in millimeters.
+    verbose : :obj:`int`, optional
+        Controls the amount of verbosity: higher numbers give more messages
+        (0 means no messages). Default=0.
+    Returns
+    -------
+    :class:`nibabel.nifti1.Nifti1Image`
+    """
+    
+    if verbose > 0:
+        print('Input intensity range {}..{}'.format(np.nanmin(img), np.nanmax(img)))
+        print('Image shape {}x{}x{}'.format(img.shape[0], img.shape[1], img.shape[2]))
+
+    dog_fdata = dehaze(img, 3, verbose)
+    dog = difference_of_gaussian(dog_fdata, img.affine, fwhm, verbose)
+    out_img = nib.Nifti1Image(dog, img.affine, img.header)
     #update header
-    nii.header.set_data_dtype(np.uint8)  
-    nii.header['intent_code'] = 0
-    nii.header['scl_slope'] = 1.0
-    nii.header['scl_inter'] = 0.0
-    nii.header['cal_max'] = 0.0
-    nii.header['cal_min'] = 0.0
+    out_img.header.set_data_dtype(np.uint8)  
+    out_img.header['intent_code'] = 0
+    out_img.header['scl_slope'] = 1.0
+    out_img.header['scl_inter'] = 0.0
+    out_img.header['cal_max'] = 0.0
+    out_img.header['cal_min'] = 0.0
     pth, nm = os.path.split(fnm)
     if not pth:
         pth = '.'
     outnm = pth + os.path.sep + 'z' + nm
-    nib.save(nii, outnm)    
+    nib.save(out_img, outnm) 
+    return out_img
+
 
 if __name__ == '__main__':
     """Apply Gaussian smooth to image
@@ -194,6 +259,17 @@ if __name__ == '__main__':
         print('No filename provided: I do not know which image to convert!')
         sys.exit()
     fnm = sys.argv[1]
-    fwhm = int(sys.argv[2])
-    process_nifti(fnm, fwhm)
+    img = nib.load(fnm)
+    img.header.set_data_dtype(np.float32)
+    dog_imported_img = dog_img(img, fwhm=3)
+    pth, nm = os.path.split(fnm)
+    if not pth:
+        pth = '.'
+    outnm = pth + os.path.sep + 'z' + nm
+    nib.save(dog_imported_img, outnm)
+    
+
+    
+
+    
 
