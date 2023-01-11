@@ -68,7 +68,7 @@ def dehaze(img, level, verbose=0):
     thresholds = skimage.filters.threshold_multiotsu(fdata, n_classes)
     thresh = thresholds[dark_classes - 1]
     if verbose > 0:
-        print("Zeroing voxels darker than {}".format(thresh), verbose=verbose)
+        print("Zeroing voxels darker than {}".format(thresh))
     fdata[fdata < thresh] = 0
     return fdata
 
@@ -261,7 +261,7 @@ if __name__ == '__main__':
     fnm = sys.argv[1]
     img = nib.load(fnm)
     img.header.set_data_dtype(np.float32)
-    dog_imported_img = dog_img(img, fwhm=3)
+    dog_imported_img = dog_img(img, fwhm=3, verbose=1)
     pth, nm = os.path.split(fnm)
     if not pth:
         pth = '.'
